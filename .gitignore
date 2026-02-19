@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+bot_database.db
+reviews_photos/
+.env
+config_local.py
