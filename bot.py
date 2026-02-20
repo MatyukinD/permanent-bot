@@ -10,9 +10,32 @@ import re
 import shutil
 import icalendar
 import requests
+import http.server
+import socketserver
 from datetime import datetime, timedelta
 from config import BOT_TOKEN, MASTER_ID
 import database as db
+
+# Простой HTTP-сервер для health check на Render
+def run_http_server():
+    port = int(os.environ.get('PORT', 8000))
+
+    class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/health':
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'OK')
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+    with socketserver.TCPServer(("", port), HealthCheckHandler) as httpd:
+        print(f"Health check server running on port {port}")
+        httpd.serve_forever()
+
+# Запускаем HTTP-сервер в фоновом потоке
+threading.Thread(target=run_http_server, daemon=True).start()
 
 # Принудительно удаляем вебхук перед запуском
 try:
@@ -23,7 +46,7 @@ except:
 
 # Константы
 OFFICE_ADDRESS = "г. Тверь, ул. Скворцова-Степанова, д. 15, 2 этаж, офис"
-BACKUP_CHANNEL = -1003729357878  # ID канала для резервного копирования и уведомлений
+BACKUP_CHANNEL = -1003729357878
 
 # Цены на услуги
 PRICES = {
@@ -39,6 +62,7 @@ db.add_master(MASTER_ID)
 # Создаём экземпляр бота и дополнительно удаляем вебхук
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.delete_webhook(drop_pending_updates=True)
+
 
 user_states = {}
 user_navigation = {}  # Для навигации: хранит предыдущее меню
