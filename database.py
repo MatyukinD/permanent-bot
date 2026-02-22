@@ -154,6 +154,16 @@ def init_db():
         )
     ''')
 
+    # Таблица черного списка
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS blacklist (
+            user_id INTEGER PRIMARY KEY,
+            reason TEXT,
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
@@ -389,3 +399,45 @@ def mark_correction_reminder_sent(reminder_id):
     cur.execute('UPDATE correction_reminders SET sent = 1 WHERE id = ?', (reminder_id,))
     conn.commit()
     conn.close()
+
+# ================== Функции для чёрного списка ==================
+def add_to_blacklist(user_id, reason=None):
+    """Добавить пользователя в чёрный список."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('''
+        INSERT OR REPLACE INTO blacklist (user_id, reason) VALUES (?, ?)
+    ''', (user_id, reason))
+    conn.commit()
+    conn.close()
+
+def remove_from_blacklist(user_id):
+    """Удалить пользователя из чёрного списка."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('DELETE FROM blacklist WHERE user_id = ?', (user_id,))
+    conn.commit()
+    conn.close()
+
+def is_blacklisted(user_id):
+    """Проверить, находится ли пользователь в чёрном списке."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('SELECT 1 FROM blacklist WHERE user_id = ?', (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row is not None
+
+def get_blacklist():
+    """Получить весь чёрный список с информацией о пользователях."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('''
+        SELECT b.user_id, b.reason, b.added_at, u.username, u.first_name, u.last_name
+        FROM blacklist b
+        LEFT JOIN users u ON b.user_id = u.user_id
+        ORDER BY b.added_at DESC
+    ''')
+    rows = cur.fetchall()
+    conn.close()
+    return rows

@@ -16,25 +16,20 @@ from datetime import datetime, timedelta
 from config import BOT_TOKEN, MASTER_ID
 import database as db
 
-# Простой HTTP-сервер для health check на Render
+# Простой HTTP-сервер для health check на Railway/Render
 def run_http_server():
     port = int(os.environ.get('PORT', 8000))
-
+    
     class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
-            if self.path == '/health':
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b'OK')
-            else:
-                self.send_response(404)
-                self.end_headers()
-
-    with socketserver.TCPServer(("", port), HealthCheckHandler) as httpd:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'OK')
+    
+    with socketserver.TCPServer(("0.0.0.0", port), HealthCheckHandler) as httpd:
         print(f"Health check server running on port {port}")
         httpd.serve_forever()
 
-# Запускаем HTTP-сервер в фоновом потоке
 threading.Thread(target=run_http_server, daemon=True).start()
 
 # Принудительно удаляем вебхук перед запуском
@@ -59,15 +54,12 @@ PRICES = {
 db.init_db()
 db.add_master(MASTER_ID)
 
-# Создаём экземпляр бота и дополнительно удаляем вебхук
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.delete_webhook(drop_pending_updates=True)
 
-
 user_states = {}
-user_navigation = {}  # Для навигации: хранит предыдущее меню
+user_navigation = {}
 
-# Календарь
 calendar = Calendar()
 calendar_callback = CallbackData("calendar", "action", "year", "month", "day")
 
@@ -102,14 +94,12 @@ survey_questions = [
     ("Какие лекарственные препараты вы принимаете на постоянной основе? (например, системные ретиноиды, антибиотики и тд.)", "text"),
 ]
 
-# ================== ФУНКЦИЯ ОТПРАВКИ В КАНАЛ ==================
 def send_to_channel(text):
     try:
         bot.send_message(BACKUP_CHANNEL, text, parse_mode='Markdown')
     except Exception as e:
         print(f"Ошибка отправки в канал: {e}")
 
-# ================== ГЛАВНОЕ МЕНЮ ==================
 def get_main_menu(user_id):
     if user_id == MASTER_ID:
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -120,6 +110,7 @@ def get_main_menu(user_id):
             types.KeyboardButton("📅 Показать все записи"),
             types.KeyboardButton("⚙️ Сгенерировать слоты"),
             types.KeyboardButton("➕ Ручное добавление клиента"),
+            types.KeyboardButton("⛔️ Черный список"),
             types.KeyboardButton("🏠 Главное меню")
         )
         return markup
@@ -160,7 +151,7 @@ def send_welcome(message):
 def back_to_main(message):
     send_welcome(message)
 
-# ================== ОБРАБОТЧИК ТЕКСТОВОЙ КНОПКИ "◀️ Назад" ==================
+# Обработчик кнопки "◀️ Назад"
 @bot.message_handler(func=lambda message: message.text == "◀️ Назад")
 def handle_back_button(message):
     user_id = message.from_user.id
@@ -176,7 +167,7 @@ def handle_back_button(message):
     else:
         send_welcome(message)
 
-# ================== ЛИЧНЫЙ КАБИНЕТ КЛИЕНТА ==================
+# -------------------- ЛИЧНЫЙ КАБИНЕТ КЛИЕНТА --------------------
 @bot.message_handler(func=lambda message: message.text == "👤 Мой профиль")
 def show_profile(message):
     user_id = message.from_user.id
@@ -268,7 +259,6 @@ def my_history_callback(call):
         text = f"📅 {app['slot_time'].strftime('%d.%m.%Y %H:%M')}\n"
         text += f"📍 Зона: {app['zone']}\n"
         text += f"🔹 Тип: {'Первичная' if app['is_primary'] else 'Кррекция'}\n"
-        # Получаем фото для этой записи
         conn = db.get_db()
         cur = conn.cursor()
         cur.execute('SELECT photo_path, photo_type FROM history_photos WHERE appointment_id = ?', (app['id'],))
@@ -377,12 +367,10 @@ def back_to_profile_callback(call):
     bot.edit_message_text(text, chat_id=user_id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-# ================== ИСПРАВЛЕННЫЙ ОБРАБОТЧИК ВОЗВРАТА В ГЛАВНОЕ МЕНЮ ==================
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_main")
 def back_to_main_callback(call):
     user_id = call.from_user.id
     bot.delete_message(user_id, call.message.message_id)
-    # Отправляем приветственное сообщение напрямую, без вызова send_welcome(call.message)
     welcome_text = (
         "✨ *Добро пожаловать в студию перманентного макияжа!* ✨\n\n"
         "Я помогу вам записаться на процедуру, напомню о визите и сохраню ваши данные.\n"
@@ -391,7 +379,7 @@ def back_to_main_callback(call):
     bot.send_message(user_id, welcome_text, parse_mode='Markdown', reply_markup=get_main_menu(user_id))
     bot.answer_callback_query(call.id)
 
-# ================== АНКЕТА (опросник) ==================
+# -------------------- АНКЕТА --------------------
 def is_survey_completed(user_id):
     user = db.get_user(user_id)
     return user and user.get('survey_data') is not None
@@ -447,7 +435,7 @@ def process_survey_answer(message, q_index):
     db.save_survey_step(user_id, None, next_index, answers)
     ask_survey_question(user_id, next_index)
 
-# ================== ЗАПИСЬ НА ПРОЦЕДУРУ ==================
+# -------------------- ЗАПИСЬ НА ПРОЦЕДУРУ --------------------
 def has_primary_done(user_id, zone):
     conn = db.get_db()
     cur = conn.cursor()
@@ -462,6 +450,10 @@ def has_primary_done(user_id, zone):
 @bot.message_handler(func=lambda message: message.text == "📝 Записаться на процедуру")
 def handle_booking_start(message):
     user_id = message.from_user.id
+    # Проверка чёрного списка
+    if db.is_blacklisted(user_id):
+        bot.send_message(user_id, "⛔️ Вы не можете записаться на процедуру, так как находитесь в черном списке. Свяжитесь с мастером для уточнения.")
+        return
     user_navigation[user_id] = 'main'
     if not is_survey_completed(user_id):
         bot.send_message(user_id, "📋 Сначала нужно заполнить анкету. Перейдите в профиль и нажмите «Заполнить анкету».")
@@ -508,7 +500,7 @@ def process_zone_choice(message):
 def handle_procedure_type(call):
     user_id = call.from_user.id
     data = call.data.split('_')
-    proc_type = data[1]  # primary or correction
+    proc_type = data[1]
     zone = data[2]
     is_primary = 1 if proc_type == 'primary' else 0
     price = PRICES[zone]['primary'] if is_primary else PRICES[zone]['correction']
@@ -824,7 +816,7 @@ def reschedule_callback(call):
     show_calendar(user_id)
     bot.answer_callback_query(call.id)
 
-# ================== ОТЗЫВЫ (КЛИЕНТ) ==================
+# -------------------- ОТЗЫВЫ (КЛИЕНТ) --------------------
 def can_leave_review(user_id):
     conn = db.get_db()
     cur = conn.cursor()
@@ -920,7 +912,7 @@ def process_review_photo_choice(message):
         markup.add("❌ Отмена", "◀️ Назад")
         msg = bot.send_message(user_id, "Отправьте фото:", reply_markup=markup)
         bot.register_next_step_handler(msg, process_review_photo_addition)
-    else:  # Пропустить
+    else:
         zone = user_states[user_id]['review_zone']
         review_text = user_states[user_id]['review_text']
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
@@ -1010,7 +1002,7 @@ def show_reviews(message):
         else:
             bot.send_message(user_id, text, parse_mode='Markdown')
 
-# ================== МАСТЕР: УПРАВЛЕНИЕ ОТЗЫВАМИ ==================
+# -------------------- МАСТЕР: УПРАВЛЕНИЕ ОТЗЫВАМИ --------------------
 def show_reviews_master(user_id):
     reviews = db.get_all_reviews()
     if not reviews:
@@ -1075,7 +1067,7 @@ def delete_review_callback(call):
     bot.answer_callback_query(call.id, "✅ Отзыв удалён.")
     bot.send_message(MASTER_ID, f"🗑 Отзыв #{review_id} удалён.")
 
-# ================== МАСТЕР: ДОБАВЛЕНИЕ СЛОТОВ ==================
+# -------------------- МАСТЕР: ДОБАВЛЕНИЕ СЛОТОВ --------------------
 @bot.message_handler(func=lambda message: message.text == "➕ Добавить слот" and message.from_user.id == MASTER_ID)
 def add_slot_start(message):
     user_id = message.from_user.id
@@ -1096,7 +1088,7 @@ def process_add_slot(message):
     except ValueError:
         bot.send_message(user_id, "❌ Неверный формат. Используйте ДД.ММ.ГГГГ ЧЧ:ММ. Попробуйте снова.")
 
-# ================== АВТОГЕНЕРАЦИЯ СЛОТОВ ==================
+# -------------------- АВТОГЕНЕРАЦИЯ СЛОТОВ --------------------
 @bot.message_handler(func=lambda message: message.text == "⚙️ Сгенерировать слоты" and message.from_user.id == MASTER_ID)
 def ask_slot_template(message):
     user_id = message.from_user.id
@@ -1153,7 +1145,7 @@ def process_slot_template(message):
 
     bot.send_message(user_id, f"✅ Сгенерировано {generated} слотов на ближайшие 7 дней.", reply_markup=get_main_menu(user_id))
 
-# ================== МАСТЕР: ПРОСМОТР И ПОДТВЕРЖДЕНИЕ ЗАПИСЕЙ ==================
+# -------------------- МАСТЕР: ПРОСМОТР И ПОДТВЕРЖДЕНИЕ ЗАПИСЕЙ --------------------
 @bot.message_handler(func=lambda message: message.text == "✅ Подтвердить записи" and message.from_user.id == MASTER_ID)
 def show_pending_appointments(message):
     user_id = message.from_user.id
@@ -1363,12 +1355,12 @@ def send_preparation_guide(user_id, zone):
         text = "Подготовка: уточните у мастера."
     bot.send_message(user_id, text, parse_mode='Markdown')
 
-# ================== МАСТЕР: ПРОСМОТР ОТЗЫВОВ ==================
+# -------------------- МАСТЕР: ПРОСМОТР ОТЗЫВОВ --------------------
 @bot.message_handler(func=lambda message: message.text == "📋 Посмотреть отзывы" and message.from_user.id == MASTER_ID)
 def handle_show_reviews_master(message):
     show_reviews_master(message.from_user.id)
 
-# ================== ВОПРОС МАСТЕРУ С КНОПКОЙ ОТВЕТА ==================
+# -------------------- ВОПРОС МАСТЕРУ --------------------
 @bot.message_handler(func=lambda message: message.text == "📩 Задать вопрос мастеру")
 def ask_master(message):
     user_id = message.from_user.id
@@ -1382,7 +1374,6 @@ def forward_question_to_master(message):
     if message.text == "🏠 Главное меню":
         send_welcome(message)
         return
-    # Отправляем мастеру вопрос и добавляем кнопку ответа
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("✏️ Ответить", callback_data=f"reply_to_{user_id}"))
     bot.send_message(MASTER_ID, f"📩 Вопрос от клиента {user_id} (@{message.from_user.username}):", reply_markup=markup)
@@ -1395,7 +1386,6 @@ def reply_to_user_callback(call):
         bot.answer_callback_query(call.id, "❌ У вас нет прав.")
         return
     user_id = int(call.data.split('_')[2])
-    # Сохраняем ID клиента для следующего шага
     user_states[MASTER_ID] = {'replying_to': user_id}
     bot.edit_message_text("✍️ Введите ответ клиенту:", chat_id=MASTER_ID, message_id=call.message.message_id)
     bot.answer_callback_query(call.id)
@@ -1414,7 +1404,6 @@ def process_master_reply(message):
     bot.send_message(MASTER_ID, f"✅ Ответ отправлен пользователю {user_id}.")
     del user_states[MASTER_ID]
 
-# (Опционально) Команда /reply на случай, если мастер предпочитает вводить команду
 @bot.message_handler(commands=['reply'])
 def master_reply_command(message):
     if message.from_user.id != MASTER_ID:
@@ -1428,7 +1417,7 @@ def master_reply_command(message):
     bot.send_message(user_id, f"📨 Ответ от мастера:\n{reply_text}")
     bot.send_message(MASTER_ID, f"✅ Ответ отправлен пользователю {user_id}.")
 
-# ================== РУЧНОЕ ДОБАВЛЕНИЕ КЛИЕНТА (МАСТЕР) ==================
+# -------------------- РУЧНОЕ ДОБАВЛЕНИЕ КЛИЕНТА --------------------
 @bot.message_handler(func=lambda message: message.text == "➕ Ручное добавление клиента" and message.from_user.id == MASTER_ID)
 def manual_add_start(message):
     msg = bot.send_message(MASTER_ID, "Введите данные в формате:\nИмя Телефон Зона(Губы/Брови/Межресничка) ГГГГ-ММ-ДД ЧЧ:ММ\nПример: Анна +79991234567 Губы 2025-03-20 15:30")
@@ -1457,7 +1446,135 @@ def process_manual_add(message):
     conn.close()
     bot.send_message(MASTER_ID, f"✅ Ручная запись добавлена: {name}, {zone}, {slot_time.strftime('%d.%m.%Y %H:%M')}")
 
-# ================== РЕЗЕРВНОЕ КОПИРОВАНИЕ ==================
+# -------------------- ЧЁРНЫЙ СПИСОК --------------------
+@bot.message_handler(func=lambda message: message.text == "⛔️ Черный список" and message.from_user.id == MASTER_ID)
+def blacklist_menu(message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("➕ Добавить в ЧС", callback_data="blacklist_add"),
+        types.InlineKeyboardButton("➖ Удалить из ЧС", callback_data="blacklist_remove"),
+        types.InlineKeyboardButton("📋 Просмотреть ЧС", callback_data="blacklist_view"),
+        types.InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")
+    )
+    bot.send_message(message.from_user.id, "⛔️ Управление черным списком:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "blacklist_add")
+def blacklist_add_callback(call):
+    if call.from_user.id != MASTER_ID:
+        bot.answer_callback_query(call.id, "❌ У вас нет прав.")
+        return
+    bot.edit_message_text("Введите ID пользователя (и, через пробел, причину блокировки, если нужно):", 
+                          chat_id=call.from_user.id, message_id=call.message.message_id)
+    bot.register_next_step_handler_by_chat_id(call.from_user.id, process_blacklist_add)
+    bot.answer_callback_query(call.id)
+
+def process_blacklist_add(message):
+    if message.from_user.id != MASTER_ID:
+        return
+    text = message.text.strip()
+    parts = text.split(maxsplit=1)
+    try:
+        user_id = int(parts[0])
+        reason = parts[1] if len(parts) > 1 else None
+    except:
+        bot.send_message(MASTER_ID, "❌ Некорректный формат. Введите ID пользователя и, если хотите, причину.")
+        return
+    db.add_to_blacklist(user_id, reason)
+    bot.send_message(MASTER_ID, f"✅ Пользователь {user_id} добавлен в чёрный список. Причина: {reason or 'не указана'}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "blacklist_remove")
+def blacklist_remove_callback(call):
+    if call.from_user.id != MASTER_ID:
+        bot.answer_callback_query(call.id, "❌ У вас нет прав.")
+        return
+    bot.edit_message_text("Введите ID пользователя для удаления из чёрного списка:", 
+                          chat_id=call.from_user.id, message_id=call.message.message_id)
+    bot.register_next_step_handler_by_chat_id(call.from_user.id, process_blacklist_remove)
+    bot.answer_callback_query(call.id)
+
+def process_blacklist_remove(message):
+    if message.from_user.id != MASTER_ID:
+        return
+    try:
+        user_id = int(message.text.strip())
+    except:
+        bot.send_message(MASTER_ID, "❌ Введите корректный ID.")
+        return
+    db.remove_from_blacklist(user_id)
+    bot.send_message(MASTER_ID, f"✅ Пользователь {user_id} удалён из чёрного списка.")
+
+@bot.callback_query_handler(func=lambda call: call.data == "blacklist_view")
+def blacklist_view_callback(call):
+    if call.from_user.id != MASTER_ID:
+        bot.answer_callback_query(call.id, "❌ У вас нет прав.")
+        return
+    blacklist = db.get_blacklist()
+    if not blacklist:
+        bot.send_message(MASTER_ID, "📭 Чёрный список пуст.")
+        return
+    text = "⛔️ *Чёрный список*\n\n"
+    for row in blacklist:
+        user_id = row['user_id']
+        name = f"{row['first_name'] or ''} {row['last_name'] or ''}".strip() or "—"
+        username = f"@{row['username']}" if row['username'] else "—"
+        reason = row['reason'] or "не указана"
+        added = row['added_at'].strftime('%d.%m.%Y %H:%M') if isinstance(row['added_at'], datetime) else row['added_at']
+        text += f"• ID: `{user_id}`\n  Имя: {name}\n  Username: {username}\n  Причина: {reason}\n  Добавлен: {added}\n\n"
+    bot.send_message(MASTER_ID, text, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+@bot.message_handler(commands=['blacklist_add'])
+def cmd_blacklist_add(message):
+    if message.from_user.id != MASTER_ID:
+        return
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 2:
+        bot.send_message(MASTER_ID, "Использование: /blacklist_add user_id [причина]")
+        return
+    try:
+        user_id = int(parts[1])
+    except:
+        bot.send_message(MASTER_ID, "❌ Некорректный ID.")
+        return
+    reason = parts[2] if len(parts) > 2 else None
+    db.add_to_blacklist(user_id, reason)
+    bot.send_message(MASTER_ID, f"✅ Пользователь {user_id} добавлен в чёрный список.")
+
+@bot.message_handler(commands=['blacklist_remove'])
+def cmd_blacklist_remove(message):
+    if message.from_user.id != MASTER_ID:
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.send_message(MASTER_ID, "Использование: /blacklist_remove user_id")
+        return
+    try:
+        user_id = int(parts[1])
+    except:
+        bot.send_message(MASTER_ID, "❌ Некорректный ID.")
+        return
+    db.remove_from_blacklist(user_id)
+    bot.send_message(MASTER_ID, f"✅ Пользователь {user_id} удалён из чёрного списка.")
+
+@bot.message_handler(commands=['blacklist_view'])
+def cmd_blacklist_view(message):
+    if message.from_user.id != MASTER_ID:
+        return
+    blacklist = db.get_blacklist()
+    if not blacklist:
+        bot.send_message(MASTER_ID, "📭 Чёрный список пуст.")
+        return
+    text = "⛔️ *Чёрный список*\n\n"
+    for row in blacklist:
+        user_id = row['user_id']
+        name = f"{row['first_name'] or ''} {row['last_name'] or ''}".strip() or "—"
+        username = f"@{row['username']}" if row['username'] else "—"
+        reason = row['reason'] or "не указана"
+        added = row['added_at'].strftime('%d.%m.%Y %H:%M') if isinstance(row['added_at'], datetime) else row['added_at']
+        text += f"• ID: `{user_id}`\n  Имя: {name}\n  Username: {username}\n  Причина: {reason}\n  Добавлен: {added}\n\n"
+    bot.send_message(MASTER_ID, text, parse_mode='Markdown')
+
+# -------------------- РЕЗЕРВНОЕ КОПИРОВАНИЕ --------------------
 def backup_worker():
     while True:
         time.sleep(24 * 3600)
@@ -1470,7 +1587,7 @@ def backup_worker():
         except Exception as e:
             print(f"Backup error: {e}")
 
-# ================== ФОНОВЫЕ ЗАДАЧИ ==================
+# -------------------- ФОНОВЫЕ ЗАДАЧИ --------------------
 def reminder_worker():
     while True:
         now = datetime.now()
@@ -1512,12 +1629,12 @@ threading.Thread(target=reminder_worker, daemon=True).start()
 threading.Thread(target=correction_reminder_worker, daemon=True).start()
 threading.Thread(target=backup_worker, daemon=True).start()
 
-# ================== ОСНОВНОЙ ОБРАБОТЧИК ==================
+# -------------------- ОСНОВНОЙ ОБРАБОТЧИК --------------------
 @bot.message_handler(func=lambda message: True)
 def handle_buttons(message):
     pass
 
-# Запуск
+# -------------------- ЗАПУСК --------------------
 if __name__ == '__main__':
     print("Бот запущен...")
     bot.infinity_polling()
