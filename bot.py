@@ -45,14 +45,14 @@ except:
     pass
 
 # Константы
-OFFICE_ADDRESS = "г. Тверь, ул. Скворцова-Степанова, д. 15, 2 этаж, офис"
+OFFICE_ADDRESS = "г. Тверь, ул. Фадеева, д. 15"
 BACKUP_CHANNEL = -1003729357878
 
 # Цены на услуги
 PRICES = {
-    "Губы": {"primary": 5000, "correction": 2500},
-    "Брови": {"primary": 5000, "correction": 2500},
-    "Межресничка": {"primary": 3000, "correction": 1500}
+    "Губы": {"primary": 4000, "correction": 2000},
+    "Брови": {"primary": 4000, "correction": 2000},
+    "Межресничка": {"primary": 1500, "correction": 1000}
 }
 
 # Инициализация базы данных
